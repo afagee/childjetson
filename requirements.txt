@@ -1,0 +1,12 @@
+# Jetson Nano / JetPack — Car Alert App
+# Cài theo thứ tự (pip không có torch/torchvision cho ARM64):
+# 1. PyTorch + torchvision từ NVIDIA (theo JetPack)
+# 2. pip install ultralytics --no-deps
+# 3. pip install -r requirements.txt
+# 4. sudo pip3 install Jetson.GPIO
+
+Flask>=2.0
+numpy>=1.21,<2
+opencv-python-headless>=4.5
+# ultralytics cài riêng: pip install "ultralytics>=8.0,<8.1" --no-deps
+ultralytics>=8.0.0,<8.1
