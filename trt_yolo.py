@@ -73,9 +73,30 @@ class TrtYolo:
         if self.engine is None:
             raise RuntimeError(f"Failed to deserialize TensorRT engine: {engine_path}")
 
+        # Kiểm tra CUDA device (pycuda.autoinit đã tạo context rồi)
+        try:
+            cuda.init()
+            device = cuda.Device(0)
+            device_name = device.name()
+            # Kiểm tra context hiện tại
+            try:
+                ctx = cuda.Context.get_current()
+                print(f"[TRT_YOLO] CUDA context active on device: {device_name}")
+            except:
+                # Nếu chưa có context, tạo mới
+                device.make_context()
+                print(f"[TRT_YOLO] CUDA context created on device: {device_name}")
+        except Exception as e:
+            print(f"[TRT_YOLO WARN] CUDA device check: {e}")
+
         self.context = self.engine.create_execution_context()
         if self.context is None:
             raise RuntimeError("Failed to create TensorRT execution context")
+        
+        # Log thông tin engine
+        print(f"[TRT_YOLO] Engine loaded: {engine_path}")
+        print(f"[TRT_YOLO] Input binding: {self.input_index}, Output binding: {self.output_index}")
+        print(f"[TRT_YOLO] Input size: {self.input_size}, Class car: {self.class_id_car}, Conf thres: {self.conf_thres}")
 
         # Giả định 1 input, 1 output
         self.input_index = None
@@ -114,14 +135,21 @@ class TrtYolo:
         bindings[self.input_index] = int(d_input)
         bindings[self.output_index] = int(d_output)
 
-        stream = cuda.Stream()
-        cuda.memcpy_htod_async(d_input, input_tensor, stream)
-        self.context.execute_v2(bindings)
-        cuda.memcpy_dtoh_async(output_tensor, d_output, stream)
-        stream.synchronize()
-
-        d_input.free()
-        d_output.free()
+        try:
+            stream = cuda.Stream()
+            cuda.memcpy_htod_async(d_input, input_tensor, stream)
+            # Chạy inference trên GPU
+            success = self.context.execute_v2(bindings)
+            if not success:
+                print("[TRT_YOLO ERROR] execute_v2 returned False")
+            cuda.memcpy_dtoh_async(output_tensor, d_output, stream)
+            stream.synchronize()
+        except Exception as e:
+            print(f"[TRT_YOLO ERROR] Inference failed: {e}")
+            raise
+        finally:
+            d_input.free()
+            d_output.free()
 
         return output_tensor.reshape(tuple(output_shape))
 
@@ -159,11 +187,18 @@ class TrtYolo:
         img = np.transpose(img, (2, 0, 1))  # CHW
         img = np.expand_dims(img, axis=0)   # NCHW
 
-        raw_output = self._infer_raw(img)
+        try:
+            raw_output = self._infer_raw(img)
+        except Exception as e:
+            print(f"[TRT_YOLO ERROR] Inference exception: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
         # Debug: in shape output để kiểm tra format (chỉ in lần đầu để tránh spam)
         if not hasattr(self, '_debug_printed'):
             print(f"[TRT_YOLO DEBUG] Output shape: {raw_output.shape}, dtype: {raw_output.dtype}")
+            print(f"[TRT_YOLO DEBUG] Output min/max: {raw_output.min():.3f} / {raw_output.max():.3f}")
             self._debug_printed = True
 
         # Ultralytics TensorRT engine có thể trả về:
@@ -291,7 +326,12 @@ class TrtYolo:
         else:
             print(f"[TRT_YOLO WARN] Unexpected output format: {dets.shape}, skipping decode")
 
-        print(f"[TRT_YOLO DEBUG] Found {len(results)} detections after filtering (conf_thres={self.conf_thres}, class_car={self.class_id_car})")
+        if len(results) > 0:
+            print(f"[TRT_YOLO] Found {len(results)} detections (conf_thres={self.conf_thres}, class_car={self.class_id_car})")
+        elif not hasattr(self, '_no_det_warned'):
+            print(f"[TRT_YOLO WARN] No detections found. Check: conf_thres={self.conf_thres}, class_car={self.class_id_car}, output_shape={raw_output.shape}")
+            self._no_det_warned = True
+        
         return results
 
             # xywh (center) -> xyxy trên hệ imgsz x imgsz

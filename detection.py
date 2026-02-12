@@ -130,7 +130,12 @@ def process_frame(frame, run_detection=True):
     if run_detection and state.model is not None:
         try:
             # Dùng TensorRT YOLO wrapper (TrtYolo) để detect trực tiếp trên frame gốc.
+            t_detect_start = time.time()
             detections = state.model.detect(frame, (config.FRAME_WIDTH, config.FRAME_HEIGHT))
+            t_detect_elapsed = (time.time() - t_detect_start) * 1000  # ms
+            if not hasattr(state, '_detect_time_logged'):
+                print(f"[DETECTION] Inference time: {t_detect_elapsed:.1f}ms, detections: {len(detections)}")
+                state._detect_time_logged = True
 
             state.latest_detections = []
             car_alert = False
